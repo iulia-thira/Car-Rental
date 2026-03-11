@@ -1,0 +1,152 @@
+version: '3.9'
+
+services:
+  # ── Databases ──────────────────────────────────────────────
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      SA_PASSWORD: "CarRental@2024!"
+      ACCEPT_EULA: "Y"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqldata:/var/opt/mssql
+
+  cosmosdb:
+    image: mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:latest
+    environment:
+      AZURE_COSMOS_EMULATOR_PARTITION_COUNT: 10
+      AZURE_COSMOS_EMULATOR_ENABLE_DATA_PERSISTENCE: "true"
+    ports:
+      - "8081:8081"
+      - "10251-10255:10251-10255"
+    volumes:
+      - cosmosdata:/tmp/cosmos/appdata
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    ports:
+      - "10000:10000"
+      - "10001:10001"
+    volumes:
+      - azuritedata:/data
+
+  servicebus:
+    image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
+    ports:
+      - "5672:5672"
+    environment:
+      ACCEPT_EULA: "Y"
+
+  # ── Services ───────────────────────────────────────────────
+  user-service:
+    build:
+      context: ./src/services/UserService
+      dockerfile: Dockerfile
+    ports:
+      - "5001:80"
+    environment:
+      - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=CarRental_Users;User=sa;Password=CarRental@2024!;TrustServerCertificate=True
+      - Jwt__Secret=super_secret_key_replace_in_prod_32chars
+      - Jwt__Issuer=CarRental
+      - Jwt__Audience=CarRentalClients
+    depends_on:
+      - sqlserver
+
+  listing-service:
+    build:
+      context: ./src/services/ListingService
+      dockerfile: Dockerfile
+    ports:
+      - "5002:80"
+    environment:
+      - Cosmos__ConnectionString=AccountEndpoint=https://cosmosdb:8081/;AccountKey=C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMspesE0==
+      - Cosmos__Database=CarRentalListings
+      - Azure__StorageConnectionString=DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OuiQEK2TA==;BlobEndpoint=http://azurite:10000/devstoreaccount1
+      - Jwt__Secret=super_secret_key_replace_in_prod_32chars
+      - Jwt__Issuer=CarRental
+      - Jwt__Audience=CarRentalClients
+    depends_on:
+      - cosmosdb
+      - azurite
+
+  booking-service:
+    build:
+      context: ./src/services/BookingService
+      dockerfile: Dockerfile
+    ports:
+      - "5003:80"
+    environment:
+      - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=CarRental_Bookings;User=sa;Password=CarRental@2024!;TrustServerCertificate=True
+      - Jwt__Secret=super_secret_key_replace_in_prod_32chars
+      - Jwt__Issuer=CarRental
+      - Jwt__Audience=CarRentalClients
+      - ServiceBus__ConnectionString=Endpoint=sb://servicebus;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=local
+    depends_on:
+      - sqlserver
+      - servicebus
+
+  payment-service:
+    build:
+      context: ./src/services/PaymentService
+      dockerfile: Dockerfile
+    ports:
+      - "5004:80"
+    environment:
+      - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=CarRental_Payments;User=sa;Password=CarRental@2024!;TrustServerCertificate=True
+      - Jwt__Secret=super_secret_key_replace_in_prod_32chars
+      - Jwt__Issuer=CarRental
+      - Jwt__Audience=CarRentalClients
+      - Stripe__SecretKey=sk_test_YOUR_KEY
+    depends_on:
+      - sqlserver
+
+  notification-service:
+    build:
+      context: ./src/services/NotificationService
+      dockerfile: Dockerfile
+    ports:
+      - "5005:80"
+    environment:
+      - ServiceBus__ConnectionString=Endpoint=sb://servicebus;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=local
+      - SendGrid__ApiKey=YOUR_SENDGRID_KEY
+      - SendGrid__FromEmail=noreply@driveshare.com
+    depends_on:
+      - servicebus
+
+  review-service:
+    build:
+      context: ./src/services/ReviewService
+      dockerfile: Dockerfile
+    ports:
+      - "5006:80"
+    environment:
+      - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=CarRental_Reviews;User=sa;Password=CarRental@2024!;TrustServerCertificate=True
+      - Jwt__Secret=super_secret_key_replace_in_prod_32chars
+      - Jwt__Issuer=CarRental
+      - Jwt__Audience=CarRentalClients
+    depends_on:
+      - sqlserver
+
+  frontend:
+    build:
+      context: ./src/frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - user-service
+      - listing-service
+      - booking-service
+      - payment-service
+      - review-service
+
+volumes:
+  sqldata:
+  cosmosdata:
+  azuritedata:
